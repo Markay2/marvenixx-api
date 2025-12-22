@@ -1,8 +1,10 @@
 from datetime import date, datetime
 
+
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy import (
     String,
+    Column,
     Integer,
     Numeric,
     Boolean,
@@ -17,7 +19,7 @@ from db import Base
 
 
 class Product(Base):
-    __tablename__ = "product"
+    __tablename__ = "products"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     sku: Mapped[str] = mapped_column(String, unique=True, nullable=False)
@@ -27,6 +29,8 @@ class Product(Base):
     tax_rate: Mapped[float] = mapped_column(Numeric(5, 2), default=0)
     is_perishable: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     selling_price: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
 
 
 
@@ -42,7 +46,7 @@ class Lot(Base):
     __tablename__ = "lot"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    product_id: Mapped[int] = mapped_column(ForeignKey("product.id"), nullable=False)
+    product_id: Mapped[int] = mapped_column(ForeignKey("products.id"), nullable=False)
     lot_code: Mapped[str] = mapped_column(String, nullable=False)
     # 👉 Notice: Python type `date` in the annotation, SQLAlchemy `Date` in the column
     expiry_date: Mapped[date | None] = mapped_column(Date, nullable=True)
@@ -52,7 +56,7 @@ class StockMove(Base):
     __tablename__ = "stock_move"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    product_id: Mapped[int] = mapped_column(ForeignKey("product.id"), nullable=False)
+    product_id: Mapped[int] = mapped_column(ForeignKey("products.id"), nullable=False)
     lot_id: Mapped[int | None] = mapped_column(ForeignKey("lot.id"))
     location_id: Mapped[int] = mapped_column(ForeignKey("location.id"), nullable=False)
     qty: Mapped[float] = mapped_column(Numeric(14, 3), nullable=False)  # +in, -out
@@ -77,9 +81,28 @@ class Sale(Base):
 class SaleLine(Base):
     __tablename__ = "sale_line"
 
+    id = Column(Integer, primary_key=True)
+    sale_id = Column(Integer, ForeignKey("sale.id"), nullable=False)
+    product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
+
+    location_id = Column(Integer, ForeignKey("location.id"), nullable=False)  # ✅ NEW
+
+    qty = Column(Float, nullable=False)
+    unit_price = Column(Float, nullable=False)
+    line_total = Column(Float, nullable=False)
+
+
+
+class CompanySettings(Base):
+    __tablename__ = "company_settings"
+
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    sale_id: Mapped[int] = mapped_column(ForeignKey("sale.id"), nullable=False)
-    product_id: Mapped[int] = mapped_column(ForeignKey("product.id"), nullable=False)
-    qty: Mapped[float] = mapped_column(Numeric(14, 3), nullable=False)
-    unit_price: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
-    line_total: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
+    company_name: Mapped[str] = mapped_column(String, default="Marvenixx POS", nullable=False)
+    address: Mapped[str] = mapped_column(String, default="", nullable=False)
+    phone: Mapped[str] = mapped_column(String, default="", nullable=False)
+    website: Mapped[str] = mapped_column(String, default="", nullable=False)
+    footer: Mapped[str] = mapped_column(String, default="Thank you for your business.", nullable=False)
+
+    # store logo as base64 string (easy + works on Render)
+    logo_base64: Mapped[str] = mapped_column(String, default="", nullable=False)
+

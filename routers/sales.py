@@ -8,18 +8,51 @@ from sqlalchemy import func
 from deps import get_db
 from models import Product, StockMove, Sale, SaleLine
 
+
 router = APIRouter(prefix="/sales", tags=["sales"])
+
+
+def get_stock_for_product(db: Session, product_id: int, location_id: int) -> float:
+    """
+    Returns total available stock for a product at a location
+    from the StockMove table.
+    """
+    qty = (
+        db.query(func.coalesce(func.sum(StockMove.qty), 0))
+        .filter(StockMove.product_id == product_id)
+        .filter(StockMove.location_id == location_id)
+        .scalar()
+    )
+    return float(qty or 0.0)
+
+
+def get_available_qty(db: Session, product_id: int, location_id: int) -> float:
+    """
+    Total stock on hand for a given product at a given location.
+    Uses StockMove.qty (positive for in, negative for out).
+    """
+    q = (
+        db.query(func.coalesce(func.sum(StockMove.qty), 0.0))
+        .filter(StockMove.product_id == product_id)
+        .filter(StockMove.location_id == location_id)
+    )
+    return float(q.scalar() or 0.0)
+
+
+router = APIRouter(prefix="/sales", tags=["sales"])
+
+ALERT_THRESHOLD = 5  # alert when remaining stock <= 5
 
 
 class SaleLineIn(BaseModel):
     sku: str
     qty: float
     unit_price: float
+    location_id: int  # ✅ NEW
 
 
 class SaleIn(BaseModel):
     customer_name: str | None = None
-    location_id: int = 1
     lines: List[SaleLineIn]
 
 
@@ -28,7 +61,7 @@ def create_sale(payload: SaleIn, db: Session = Depends(get_db)):
     if not payload.lines:
         raise HTTPException(status_code=400, detail="No lines in sale")
 
-    # Find products and calculate total
+    # 1) Validate + map products
     total = 0.0
     product_map: dict[str, Product] = {}
 
@@ -37,24 +70,36 @@ def create_sale(payload: SaleIn, db: Session = Depends(get_db)):
             raise HTTPException(status_code=400, detail="Quantity must be > 0")
         if line.unit_price < 0:
             raise HTTPException(status_code=400, detail="Price cannot be negative")
+        if not line.location_id:
+            raise HTTPException(status_code=400, detail="location_id is required per line")
 
         product = db.query(Product).filter_by(sku=line.sku).first()
         if not product:
             raise HTTPException(status_code=400, detail=f"Unknown SKU {line.sku}")
 
+        # 2) SERVER-SIDE stock check (per location)
+        available = (
+            db.query(func.coalesce(func.sum(StockMove.qty), 0))
+            .filter(StockMove.product_id == product.id)
+            .filter(StockMove.location_id == line.location_id)
+            .scalar()
+        )
+        if float(line.qty) > float(available or 0):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Not enough stock for {product.name} at location {line.location_id}. Available: {available}",
+            )
+
         product_map[line.sku] = product
         total += float(line.qty) * float(line.unit_price)
 
-    # Create sale header
-    sale = Sale(
-        customer_name=payload.customer_name,
-        total_amount=total,
-    )
+    # 3) Create sale header
+    sale = Sale(customer_name=payload.customer_name, total_amount=total)
     db.add(sale)
     db.commit()
     db.refresh(sale)
 
-    # Create sale lines + stock moves
+    # 4) Create sale lines + stock moves (per line/location)
     for line in payload.lines:
         product = product_map[line.sku]
         line_total = float(line.qty) * float(line.unit_price)
@@ -62,30 +107,29 @@ def create_sale(payload: SaleIn, db: Session = Depends(get_db)):
         sl = SaleLine(
             sale_id=sale.id,
             product_id=product.id,
-            qty=line.qty,
-            unit_price=line.unit_price,
+            location_id=line.location_id,  # ✅ NEW
+            qty=float(line.qty),
+            unit_price=float(line.unit_price),
             line_total=line_total,
         )
         db.add(sl)
 
-        # Negative stock move for sale
         move = StockMove(
             product_id=product.id,
-            lot_id=None,  # later we can do FEFO by lot
-            location_id=payload.location_id,
+            lot_id=None,
+            location_id=line.location_id,   # ✅ per line
             qty=-float(line.qty),
-            unit_cost=None,  # cost vs price we can refine later
+            unit_cost=None,
             move_type="SALE",
             ref=f"SALE-{sale.id}",
         )
         db.add(move)
 
     db.commit()
-    return {
-        "sale_id": sale.id,
-        "total": total,
-        "lines": len(payload.lines),
-    }
+
+    return {"sale_id": sale.id, "total": total, "lines": len(payload.lines)}
+
+
 
 
 

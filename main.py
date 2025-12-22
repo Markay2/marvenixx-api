@@ -8,6 +8,8 @@ from routers import (
     reports,
     sales,
     reports_sales,
+    transfers,
+    settings,   # ✅ include settings here
 )
 
 app = FastAPI(title="Ateasefuor Inventory API")
@@ -21,3 +23,5 @@ app.include_router(receipts.router)
 app.include_router(reports.router)
 app.include_router(sales.router)
 app.include_router(reports_sales.router)
+app.include_router(transfers.router)
+app.include_router(settings.router)   # ✅ include router AFTER app exists

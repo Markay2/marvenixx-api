@@ -4,3 +4,6 @@ sqlalchemy
 psycopg[binary]
 python-dotenv
 pydantic
+
+
+extra-streamlit-components==0.1.71

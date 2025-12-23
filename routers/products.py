@@ -1,11 +1,12 @@
 # api/routers/products.py
 
-from typing import List, Optional
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import func
+
 from deps import get_db
 from models import Product, StockMove
 
@@ -29,44 +30,20 @@ class ProductUpdate(BaseModel):
     unit: Optional[str] = None
     tax_rate: Optional[float] = None
     selling_price: Optional[float] = None
-    is_active: Optional[bool] = None
+    # NOTE: removed is_active because DB column does not exist
 
 
 # ---------- Helpers ----------
 
 def generate_sku(db: Session, name: str) -> str:
-    """
-    Generate a simple SKU like RICE0001, RICE0002, etc.
-    Uses product name prefix + next numeric counter.
-    """
     prefix = "".join(ch for ch in name.upper() if ch.isalnum())[:4] or "PRD"
-
-    # get max id and use as counter
     max_id = db.query(func.coalesce(func.max(Product.id), 0)).scalar() or 0
     counter = max_id + 1
-
     sku = f"{prefix}{counter:04d}"
-
-    # ensure uniqueness (very unlikely we loop many times)
     while db.query(Product).filter(Product.sku == sku).first():
         counter += 1
         sku = f"{prefix}{counter:04d}"
-
     return sku
-
-
-def get_available_stock(db: Session, product_id: int) -> float:
-    """
-    Net stock across ALL locations, used for /products/with_stock.
-    POS uses this to show 'Available: xx unit'.
-    """
-    qty = (
-        db.query(func.coalesce(func.sum(StockMove.qty), 0.0))
-        .filter(StockMove.product_id == product_id)
-        .scalar()
-        or 0.0
-    )
-    return float(qty)
 
 
 # ---------- Routes ----------
@@ -74,36 +51,28 @@ def get_available_stock(db: Session, product_id: int) -> float:
 @router.get("")
 def list_products(db: Session = Depends(get_db)):
     """
-    List all ACTIVE products (is_active = true).
+    List products.
+    IMPORTANT: we do NOT filter by is_active because the Render DB table does not have that column.
     """
-    rows = (
-        db.query(Product)
-        .filter(Product.is_active == True)  # noqa: E712
-        .order_by(Product.name.asc())
-        .all()
-    )
-    result = []
-    for p in rows:
-        result.append(
-            {
-                "id": p.id,
-                "sku": p.sku,
-                "name": p.name,
-                "barcode": p.barcode,
-                "unit": p.unit,
-                "tax_rate": float(p.tax_rate or 0.0),
-                "selling_price": float(p.selling_price or 0.0),
-                "is_active": bool(p.is_active),
-            }
-        )
-    return result
-
+    rows = db.query(Product).order_by(Product.name.asc()).all()
+    return [
+        {
+            "id": p.id,
+            "sku": p.sku,
+            "name": p.name,
+            "barcode": p.barcode,
+            "unit": p.unit,
+            "tax_rate": float(p.tax_rate or 0.0),
+            "selling_price": float(p.selling_price or 0.0),
+        }
+        for p in rows
+    ]
 
 
 @router.get("/with_stock")
 def products_with_stock(
     location_id: int = Query(1),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     rows = (
         db.query(
@@ -115,8 +84,11 @@ def products_with_stock(
             Product.tax_rate,
             func.coalesce(func.sum(StockMove.qty), 0).label("available_qty"),
         )
-        .outerjoin(StockMove, (StockMove.product_id == Product.id) & (StockMove.location_id == location_id))
-        .filter(Product.is_active == True)
+        .outerjoin(
+            StockMove,
+            (StockMove.product_id == Product.id) & (StockMove.location_id == location_id),
+        )
+        # IMPORTANT: removed Product.is_active filter
         .group_by(Product.id)
         .order_by(Product.name.asc())
         .all()
@@ -136,13 +108,8 @@ def products_with_stock(
     ]
 
 
-
 @router.post("")
 def create_product(payload: ProductCreate, db: Session = Depends(get_db)):
-    """
-    Create a new product.
-    If SKU is empty, we auto-generate one from the name.
-    """
     name = payload.name.strip()
     if not name:
         raise HTTPException(status_code=400, detail="Name cannot be empty.")
@@ -151,10 +118,10 @@ def create_product(payload: ProductCreate, db: Session = Depends(get_db)):
     if not incoming_sku:
         incoming_sku = generate_sku(db, name)
 
-    # ensure uniqueness if user provided SKU
     if db.query(Product).filter(Product.sku == incoming_sku).first():
         raise HTTPException(status_code=400, detail="SKU already exists.")
 
+    # IMPORTANT: do NOT pass is_active because DB column does not exist
     p = Product(
         sku=incoming_sku,
         name=name,
@@ -162,7 +129,6 @@ def create_product(payload: ProductCreate, db: Session = Depends(get_db)):
         unit=payload.unit,
         tax_rate=payload.tax_rate,
         selling_price=payload.selling_price,
-        is_active=True,
     )
     db.add(p)
     db.commit()
@@ -176,27 +142,17 @@ def create_product(payload: ProductCreate, db: Session = Depends(get_db)):
         "unit": p.unit,
         "tax_rate": float(p.tax_rate or 0.0),
         "selling_price": float(p.selling_price or 0.0),
-        "is_active": bool(p.is_active),
     }
 
 
 @router.patch("/{product_id}")
-def update_product(
-    product_id: int,
-    payload: ProductUpdate,
-    db: Session = Depends(get_db),
-):
-    """
-    Update product fields (name, unit, selling_price, tax_rate, barcode, is_active).
-    Used by admin edit form.
-    """
+def update_product(product_id: int, payload: ProductUpdate, db: Session = Depends(get_db)):
     p = db.query(Product).filter(Product.id == product_id).first()
     if not p:
         raise HTTPException(status_code=404, detail="Product not found.")
 
     data = payload.dict(exclude_unset=True)
 
-    # Don't allow editing SKU here to keep it stable
     if "name" in data and data["name"]:
         p.name = data["name"].strip()
     if "barcode" in data:
@@ -207,8 +163,6 @@ def update_product(
         p.tax_rate = data["tax_rate"]
     if "selling_price" in data and data["selling_price"] is not None:
         p.selling_price = data["selling_price"]
-    if "is_active" in data and data["is_active"] is not None:
-        p.is_active = data["is_active"]
 
     db.commit()
     db.refresh(p)
@@ -221,21 +175,18 @@ def update_product(
         "unit": p.unit,
         "tax_rate": float(p.tax_rate or 0.0),
         "selling_price": float(p.selling_price or 0.0),
-        "is_active": bool(p.is_active),
     }
 
 
 @router.delete("/{product_id}")
-def deactivate_product(product_id: int, db: Session = Depends(get_db)):
+def delete_product(product_id: int, db: Session = Depends(get_db)):
     """
-    Soft-delete: mark product as inactive.
-    POS and Receive Stock will NOT show it anymore,
-    but your past sales history is preserved.
+    HARD delete (since is_active column doesn't exist).
+    If you want soft-delete later, we will add is_active safely with ALTER TABLE.
     """
     p = db.query(Product).filter(Product.id == product_id).first()
     if not p:
         raise HTTPException(status_code=404, detail="Product not found.")
-
-    p.is_active = False
+    db.delete(p)
     db.commit()
-    return {"status": "ok", "message": "Product deactivated."}
+    return {"status": "ok", "message": "Product deleted."}

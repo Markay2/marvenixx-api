@@ -1,24 +1,14 @@
 from datetime import date, datetime
-
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy import (
-    String,
-    Column,
-    Integer,
-    Numeric,
-    Boolean,
-    ForeignKey,
-    Date,
-    DateTime,
-    Float,
-    func,
+    String, Column, Integer, Numeric, Boolean, ForeignKey,
+    Date, DateTime, Float, func
 )
-
 from db import Base
 
 
 class Product(Base):
-    __tablename__ = "product"  # ✅ KEEP singular (matches your Render DB)
+    __tablename__ = "product"   # ✅ was "products"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     sku: Mapped[str] = mapped_column(String, unique=True, nullable=False)
@@ -32,7 +22,7 @@ class Product(Base):
 
 
 class Location(Base):
-    __tablename__ = "location"
+    __tablename__ = "location"  # ✅ keep as "location" since your API returns rows
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String, nullable=False)
@@ -42,7 +32,7 @@ class Lot(Base):
     __tablename__ = "lot"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    product_id: Mapped[int] = mapped_column(ForeignKey("product.id"), nullable=False)
+    product_id: Mapped[int] = mapped_column(ForeignKey("product.id"), nullable=False)  # ✅
     lot_code: Mapped[str] = mapped_column(String, nullable=False)
     expiry_date: Mapped[date | None] = mapped_column(Date, nullable=True)
 
@@ -51,27 +41,21 @@ class StockMove(Base):
     __tablename__ = "stock_move"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    product_id: Mapped[int] = mapped_column(ForeignKey("product.id"), nullable=False)
-    lot_id: Mapped[int | None] = mapped_column(ForeignKey("lot.id"), nullable=True)
-    location_id: Mapped[int] = mapped_column(ForeignKey("location.id"), nullable=False)
-
-    qty: Mapped[float] = mapped_column(Numeric(14, 3), nullable=False)  # +in, -out
-    unit_cost: Mapped[float | None] = mapped_column(Numeric(14, 4), nullable=True)
-    move_type: Mapped[str] = mapped_column(String, nullable=False)  # RECEIPT, SALE, etc.
-    ref: Mapped[str | None] = mapped_column(String, nullable=True)
-
-    moved_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    product_id: Mapped[int] = mapped_column(ForeignKey("product.id"), nullable=False)  # ✅
+    lot_id: Mapped[int | None] = mapped_column(ForeignKey("lot.id"))
+    location_id: Mapped[int] = mapped_column(ForeignKey("location.id"), nullable=False)  # ✅
+    qty: Mapped[float] = mapped_column(Numeric(14, 3), nullable=False)
+    unit_cost: Mapped[float | None] = mapped_column(Numeric(14, 4))
+    move_type: Mapped[str] = mapped_column(String, nullable=False)
+    ref: Mapped[str | None] = mapped_column(String)
+    moved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class Sale(Base):
     __tablename__ = "sale"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     customer_name: Mapped[str | None] = mapped_column(String, nullable=True)
     total_amount: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
 
@@ -81,9 +65,8 @@ class SaleLine(Base):
 
     id = Column(Integer, primary_key=True)
     sale_id = Column(Integer, ForeignKey("sale.id"), nullable=False)
-    product_id = Column(Integer, ForeignKey("product.id"), nullable=False)
-    location_id = Column(Integer, ForeignKey("location.id"), nullable=False)
-
+    product_id = Column(Integer, ForeignKey("product.id"), nullable=False)      # ✅ was products.id
+    location_id = Column(Integer, ForeignKey("location.id"), nullable=False)   # ✅
     qty = Column(Float, nullable=False)
     unit_price = Column(Float, nullable=False)
     line_total = Column(Float, nullable=False)
@@ -98,5 +81,4 @@ class CompanySettings(Base):
     phone: Mapped[str] = mapped_column(String, default="", nullable=False)
     website: Mapped[str] = mapped_column(String, default="", nullable=False)
     footer: Mapped[str] = mapped_column(String, default="Thank you for your business.", nullable=False)
-
     logo_base64: Mapped[str] = mapped_column(String, default="", nullable=False)

@@ -20,3 +20,6 @@ def add_location(loc: LocationIn, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(new)
     return new
+
+
+rows = db.query(Location).order_by(Location.sort_order.asc(), Location.name.asc()).all()

@@ -11,6 +11,8 @@ from models import Product, StockMove, Sale, SaleLine
 
 router = APIRouter(prefix="/sales", tags=["sales"])
 
+ALERT_THRESHOLD = 5  # alert when remaining stock <= 5
+
 
 def get_stock_for_product(db: Session, product_id: int, location_id: int) -> float:
     """
@@ -39,95 +41,179 @@ def get_available_qty(db: Session, product_id: int, location_id: int) -> float:
     return float(q.scalar() or 0.0)
 
 
-router = APIRouter(prefix="/sales", tags=["sales"])
 
-ALERT_THRESHOLD = 5  # alert when remaining stock <= 5
+from pydantic import BaseModel
+from typing import List, Optional
 
+class SaleAddLine(BaseModel):
+    sku: str
+    qty: float
+    unit_price: float
 
+class SaleAddLinesPayload(BaseModel):
+    location_id: Optional[int] = None   # optional override; else use sale header location if you have it
+    lines: List[SaleAddLine]
+
+    
 class SaleLineIn(BaseModel):
     sku: str
     qty: float
     unit_price: float
-    location_id: int  # ✅ NEW
+
 
 
 class SaleIn(BaseModel):
-    customer_name: str | None = None
+    customer_name: Optional[str] = None
+    location_id: int                  # ✅ sale header location
+    payment_method: Optional[str] = None
     lines: List[SaleLineIn]
+
+
 
 
 @router.post("")
 def create_sale(payload: SaleIn, db: Session = Depends(get_db)):
+    """
+    Create a sale (POST /sales)
+    IMPORTANT:
+      - sale_line table has NO location_id column
+      - stock_move DOES use location_id
+    """
     if not payload.lines:
-        raise HTTPException(status_code=400, detail="No lines in sale")
+        raise HTTPException(status_code=400, detail="No lines provided")
 
-    # 1) Validate + map products
+    sale = Sale(customer_name=payload.customer_name)
+    db.add(sale)
+    db.flush()  # gets sale.id
+
     total = 0.0
-    product_map: dict[str, Product] = {}
+    low_stock = []
 
     for line in payload.lines:
-        if line.qty <= 0:
-            raise HTTPException(status_code=400, detail="Quantity must be > 0")
-        if line.unit_price < 0:
-            raise HTTPException(status_code=400, detail="Price cannot be negative")
-        if not line.location_id:
-            raise HTTPException(status_code=400, detail="location_id is required per line")
-
-        product = db.query(Product).filter_by(sku=line.sku).first()
+        product = db.query(Product).filter(Product.sku == line.sku).first()
         if not product:
-            raise HTTPException(status_code=400, detail=f"Unknown SKU {line.sku}")
+            raise HTTPException(status_code=404, detail=f"Product not found: {line.sku}")
 
-        # 2) SERVER-SIDE stock check (per location)
-        available = (
-            db.query(func.coalesce(func.sum(StockMove.qty), 0))
-            .filter(StockMove.product_id == product.id)
-            .filter(StockMove.location_id == line.location_id)
-            .scalar()
-        )
-        if float(line.qty) > float(available or 0):
+        qty = float(line.qty)
+        unit_price = float(line.unit_price)
+        if qty <= 0:
+            raise HTTPException(status_code=400, detail="qty must be > 0")
+
+        # check stock at the line's location_id
+        available = get_available_qty(db, product.id, int(line.location_id))
+        if qty > available:
             raise HTTPException(
                 status_code=400,
                 detail=f"Not enough stock for {product.name} at location {line.location_id}. Available: {available}",
             )
 
-        product_map[line.sku] = product
-        total += float(line.qty) * float(line.unit_price)
+        line_total = qty * unit_price
+        total += line_total
 
-    # 3) Create sale header
-    sale = Sale(customer_name=payload.customer_name, total_amount=total)
-    db.add(sale)
-    db.commit()
-    db.refresh(sale)
-
-    # 4) Create sale lines + stock moves (per line/location)
-    for line in payload.lines:
-        product = product_map[line.sku]
-        line_total = float(line.qty) * float(line.unit_price)
-
+        # ✅ DO NOT include location_id in SaleLine (DB has no such column)
         sl = SaleLine(
             sale_id=sale.id,
             product_id=product.id,
-            location_id=line.location_id,  # ✅ NEW
-            qty=float(line.qty),
-            unit_price=float(line.unit_price),
+            qty=qty,
+            unit_price=unit_price,
             line_total=line_total,
         )
         db.add(sl)
 
-        move = StockMove(
+        # ✅ StockMove uses location_id
+        sm = StockMove(
             product_id=product.id,
             lot_id=None,
-            location_id=line.location_id,   # ✅ per line
-            qty=-float(line.qty),
+            location_id=int(line.location_id),
+            qty=-qty,
             unit_cost=None,
             move_type="SALE",
-            ref=f"SALE-{sale.id}",
+            ref=f"SALE#{sale.id}",
         )
-        db.add(move)
+        db.add(sm)
+
+        remaining = available - qty
+        if remaining <= ALERT_THRESHOLD:
+            low_stock.append(
+                {
+                    "sku": product.sku,
+                    "name": product.name,
+                    "remaining": float(remaining),
+                }
+            )
+
+    # store total if your Sale table has total_amount (it does)
+    sale.total_amount = total
 
     db.commit()
 
-    return {"sale_id": sale.id, "total": total, "lines": len(payload.lines)}
+    return {"sale_id": sale.id, "total": float(total), "low_stock": low_stock}
+
+
+
+    
+
+
+@router.post("/{sale_id}/add_lines")
+def add_lines_to_sale(sale_id: int, payload: SaleAddLinesPayload, db: Session = Depends(get_db)):
+    sale = db.query(Sale).filter(Sale.id == sale_id).first()
+    if not sale:
+        raise HTTPException(status_code=404, detail="Sale not found")
+
+    if not payload.lines:
+        raise HTTPException(status_code=400, detail="No lines provided")
+
+    # If Sale table has no location_id column, payload must send it
+    location_id = payload.location_id or getattr(sale, "location_id", None)
+    if not location_id:
+        raise HTTPException(status_code=400, detail="location_id is required")
+
+    for ln in payload.lines:
+        product = db.query(Product).filter(Product.sku == ln.sku).first()
+        if not product:
+            raise HTTPException(status_code=404, detail=f"Product SKU not found: {ln.sku}")
+
+        qty = float(ln.qty)
+        if qty <= 0:
+            raise HTTPException(status_code=400, detail="qty must be > 0")
+
+        # stock guard
+        available = get_available_qty(db, product.id, int(location_id))
+        if qty > available:
+            raise HTTPException(status_code=400, detail=f"Not enough stock for {ln.sku}. Available: {available}")
+
+        unit_price = float(ln.unit_price)
+        line_total = qty * unit_price
+
+        db.add(SaleLine(
+            sale_id=sale.id,
+            product_id=product.id,
+            qty=qty,
+            unit_price=unit_price,
+            line_total=line_total,
+        ))
+
+        db.add(StockMove(
+            product_id=product.id,
+            lot_id=None,
+            location_id=int(location_id),
+            qty=-qty,
+            unit_cost=None,
+            move_type="SALE_ADJUST",
+            ref=f"SALE#{sale.id}",
+        ))
+
+    # recompute total
+    total_now = (
+        db.query(func.coalesce(func.sum(SaleLine.line_total), 0))
+        .filter(SaleLine.sale_id == sale.id)
+        .scalar()
+        or 0
+    )
+    sale.total_amount = total_now
+    db.commit()
+
+    return {"status": "ok", "sale_id": sale.id, "new_total": float(total_now)}
 
 
 

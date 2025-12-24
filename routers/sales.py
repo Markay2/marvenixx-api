@@ -9,6 +9,7 @@ from deps import get_db
 from models import Product, StockMove, Sale, SaleLine
 
 
+
 router = APIRouter(prefix="/sales", tags=["sales"])
 
 ALERT_THRESHOLD = 5  # alert when remaining stock <= 5
@@ -40,10 +41,6 @@ def get_available_qty(db: Session, product_id: int, location_id: int) -> float:
     )
     return float(q.scalar() or 0.0)
 
-
-
-from pydantic import BaseModel
-from typing import List, Optional
 
 class SaleAddLine(BaseModel):
     sku: str
@@ -124,7 +121,7 @@ def create_sale(payload: SaleIn, db: Session = Depends(get_db)):
         sm = StockMove(
             product_id=product.id,
             lot_id=None,
-            location_id=int(line.location_id),
+            location_id=payload.location_id,  # ✅ from header
             qty=-qty,
             unit_cost=None,
             move_type="SALE",

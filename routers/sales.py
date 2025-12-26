@@ -70,6 +70,10 @@ class SaleIn(BaseModel):
 
 @router.post("")
 def create_sale(payload: SaleIn, db: Session = Depends(get_db)):
+
+    if not payload.location_id:
+        raise HTTPException(status_code=400, detail="location_id is required")
+
     """
     Create a sale (POST /sales)
     IMPORTANT:
@@ -79,11 +83,16 @@ def create_sale(payload: SaleIn, db: Session = Depends(get_db)):
     if not payload.lines:
         raise HTTPException(status_code=400, detail="No lines provided")
 
-    sale = Sale(customer_name=payload.customer_name)
+    sale = Sale(
+        customer_name=payload.customer_name,
+        location_id=int(payload.location_id),
+        total_amount=0,
+    )
     db.add(sale)
-    db.flush()  # gets sale.id
+    db.flush()
 
-    total = 0.0
+    
+    
     low_stock = []
 
     for line in payload.lines:

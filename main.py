@@ -1,11 +1,11 @@
 from fastapi import FastAPI
 from db import init_db
-
+from models import Base
 from routers import health, products, locations, receipts, reports, sales, reports_sales, transfers, settings
 
-app = FastAPI(title="Ateasefuor Inventory API")
+init_db(Base)
 
-init_db()
+app = FastAPI()
 
 app.include_router(health.router)
 app.include_router(products.router)

@@ -1,9 +1,11 @@
 from datetime import datetime, date
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy import (
-    String, Integer, Numeric, Boolean, ForeignKey, Date, DateTime, Float, func
+    String, Integer, Numeric, Text, Boolean, ForeignKey, Date, DateTime, Float, func
 )
 from db import Base
+
+
 
 
 class Product(Base):
@@ -70,3 +72,21 @@ class SaleLine(Base):
     qty: Mapped[float] = mapped_column(Numeric(14, 3), nullable=False)
     unit_price: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
     line_total: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
+
+
+
+class CompanySettings(Base):
+    __tablename__ = "company_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+
+    company_name: Mapped[str] = mapped_column(String(200), default="Marvenixx", nullable=False)
+    phone: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    address: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    currency_symbol: Mapped[str] = mapped_column(String(10), default="₵", nullable=False)
+
+    receipt_footer: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Optional: logo url or path if you ever need it
+    logo_url: Mapped[str | None] = mapped_column(Text, nullable=True)

@@ -1,9 +1,6 @@
-fastapi
-uvicorn[standard]
-sqlalchemy
-psycopg[binary]
-python-dotenv
-pydantic
-
-
-extra-streamlit-components==0.1.71
+fastapi==0.127.0
+uvicorn[standard]==0.40.0
+sqlalchemy==2.0.45
+psycopg[binary]==3.3.2
+python-dotenv==1.2.1
+pydantic==2.12.5

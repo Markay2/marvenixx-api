@@ -59,11 +59,13 @@ class Sale(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     customer_name: Mapped[str | None] = mapped_column(String, nullable=True)
-
-    # ✅ MUST exist because your DB has sale.location_id NOT NULL
+    
     location_id: Mapped[int] = mapped_column(ForeignKey("location.id"), nullable=False)
 
-    total_amount: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False, default=0)
+    receipt_no: Mapped[str | None] = mapped_column(String(50), nullable=True)  # ✅ ADD THIS
+
+    total_amount: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False, default=0)    
+
 
 
 

@@ -1,3 +1,4 @@
+# routers/sales.py
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -13,7 +14,6 @@ ALERT_THRESHOLD = 5  # alert when remaining stock <= 5
 
 
 def get_available_qty(db: Session, product_id: int, location_id: int) -> float:
-    """Total stock on hand for a product at a location using StockMove.qty."""
     q = (
         db.query(func.coalesce(func.sum(StockMove.qty), 0.0))
         .filter(StockMove.product_id == product_id)
@@ -35,6 +35,7 @@ class SaleIn(BaseModel):
     lines: List[SaleLineIn]
 
 
+@router.post("")
 @router.post("/")
 def create_sale(payload: SaleIn, db: Session = Depends(get_db)):
     if not payload.location_id:
@@ -43,73 +44,88 @@ def create_sale(payload: SaleIn, db: Session = Depends(get_db)):
     if not payload.lines:
         raise HTTPException(status_code=400, detail="No lines provided")
 
-    sale = Sale(
-        customer_name=payload.customer_name,
-        location_id=int(payload.location_id),  # REQUIRED by your DB
-        total_amount=0,
-    )
-    db.add(sale)
-    db.flush()  # gives sale.id
-
-    total = 0.0
-    low_stock = []
-
-    for line in payload.lines:
-        product = db.query(Product).filter(Product.sku == line.sku).first()
-        if not product:
-            db.rollback()
-            raise HTTPException(status_code=404, detail=f"Product not found: {line.sku}")
-
-        qty = float(line.qty)
-        unit_price = float(line.unit_price)
-
-        if qty <= 0:
-            db.rollback()
-            raise HTTPException(status_code=400, detail="qty must be > 0")
-
-        available = get_available_qty(db, product.id, int(payload.location_id))
-        if qty > available:
-            db.rollback()
-            raise HTTPException(
-                status_code=400,
-                detail=f"Not enough stock for {product.name} at location {payload.location_id}. Available: {available}",
-            )
-
-        line_total = qty * unit_price
-        total += line_total
-
-        db.add(
-            SaleLine(
-                sale_id=sale.id,
-                product_id=product.id,
-                qty=qty,
-                unit_price=unit_price,
-                line_total=line_total,
-            )
+    try:
+        sale = Sale(
+            customer_name=payload.customer_name,
+            location_id=int(payload.location_id),
+            total_amount=0,
         )
+        db.add(sale)
+        db.flush()  # ✅ now sale.id and sale.created_at exist (created_at may be server_default)
 
-        db.add(
-            StockMove(
-                product_id=product.id,
-                lot_id=None,
-                location_id=int(payload.location_id),
-                qty=-qty,
-                unit_cost=None,
-                move_type="SALE",
-                ref=f"SALE#{sale.id}",
+        # ✅ receipt_no (safe even if created_at is None)
+        year = sale.created_at.year if sale.created_at else date.today().year
+        sale.receipt_no = f"MX-{year}-{sale.id:06d}"
+        db.flush()
+
+        total = 0.0
+        low_stock = []
+
+        for line in payload.lines:
+            product = db.query(Product).filter(Product.sku == line.sku).first()
+            if not product:
+                raise HTTPException(status_code=404, detail=f"Product not found: {line.sku}")
+
+            qty = float(line.qty)
+            unit_price = float(line.unit_price)
+
+            if qty <= 0:
+                raise HTTPException(status_code=400, detail="qty must be > 0")
+
+            available = get_available_qty(db, product.id, int(payload.location_id))
+            if qty > available:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Not enough stock for {product.name} at location {payload.location_id}. Available: {available}",
+                )
+
+            line_total = qty * unit_price
+            total += line_total
+
+            db.add(
+                SaleLine(
+                    sale_id=sale.id,
+                    product_id=product.id,
+                    qty=qty,
+                    unit_price=unit_price,
+                    line_total=line_total,
+                )
             )
-        )
 
-        remaining = available - qty
-        if remaining <= ALERT_THRESHOLD:
-            low_stock.append(
-                {"sku": product.sku, "name": product.name, "remaining": float(remaining)}
+            db.add(
+                StockMove(
+                    product_id=product.id,
+                    lot_id=None,
+                    location_id=int(payload.location_id),
+                    qty=-qty,
+                    unit_cost=None,
+                    move_type="SALE",
+                    ref=f"SALE#{sale.id}",
+                )
             )
 
-    sale.total_amount = total
-    db.commit()
+            remaining = available - qty
+            if remaining <= ALERT_THRESHOLD:
+                low_stock.append(
+                    {"sku": product.sku, "name": product.name, "remaining": float(remaining)}
+                )
 
-    return {"sale_id": sale.id, "total": float(total), "low_stock": low_stock}
+        sale.total_amount = total
+        db.commit()
+
+        return {
+            "sale_id": sale.id,
+            "receipt_no": sale.receipt_no,
+            "total": float(total),
+            "low_stock": low_stock,
+        }
+
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/history")
@@ -119,7 +135,6 @@ def sales_history(
     limit: int = Query(500, ge=1, le=10000),
     db: Session = Depends(get_db),
 ):
-    # Parse dates safely
     try:
         start_d = date.fromisoformat(start_date)
         end_d = date.fromisoformat(end_date)
@@ -135,12 +150,13 @@ def sales_history(
             Sale.created_at,
             Sale.customer_name,
             Sale.location_id,
+            Sale.receipt_no,
             func.coalesce(func.sum(SaleLine.line_total), 0).label("total"),
         )
         .outerjoin(SaleLine, SaleLine.sale_id == Sale.id)
         .filter(func.date(Sale.created_at) >= start_d)
         .filter(func.date(Sale.created_at) <= end_d)
-        .group_by(Sale.id, Sale.created_at, Sale.customer_name, Sale.location_id)
+        .group_by(Sale.id, Sale.created_at, Sale.customer_name, Sale.location_id, Sale.receipt_no)
         .order_by(Sale.created_at.desc())
         .limit(limit)
         .all()
@@ -152,6 +168,7 @@ def sales_history(
             "created_at": r.created_at.isoformat() if r.created_at else None,
             "customer_name": r.customer_name,
             "location_id": r.location_id,
+            "receipt_no": r.receipt_no,
             "total": float(r.total or 0),
         }
         for r in rows
@@ -192,7 +209,8 @@ def get_sale(sale_id: int, db: Session = Depends(get_db)):
             "created_at": sale.created_at.isoformat() if sale.created_at else None,
             "customer_name": sale.customer_name,
             "location_id": sale.location_id,
-            "total": total,
+            "receipt_no": getattr(sale, "receipt_no", None),
+            "total": float(total),
         },
         "lines": line_list,
     }

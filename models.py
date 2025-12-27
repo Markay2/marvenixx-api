@@ -55,15 +55,16 @@ class StockMove(Base):
 class Sale(Base):
     __tablename__ = "sale"
 
-    id = Column(Integer, primary_key=True, index=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
-    customer_name = Column(String, nullable=True)
+    customer_name: Mapped[str | None] = mapped_column(String, nullable=True)
 
-    # ✅ ADD THIS (matches your DB)
-    location_id = Column(Integer, ForeignKey("location.id"), nullable=False)
+    # ✅ MUST exist because your DB has sale.location_id NOT NULL
+    location_id: Mapped[int] = mapped_column(ForeignKey("location.id"), nullable=False)
 
-    total_amount = Column(Numeric(14, 2), nullable=False, default=0)
+    total_amount: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False, default=0)
+
 
 
 class SaleLine(Base):
@@ -83,15 +84,18 @@ class SaleLine(Base):
 class CompanySettings(Base):
     __tablename__ = "company_settings"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
 
-    company_name: Mapped[str] = mapped_column(String(200), default="Marvenixx", nullable=False)
-    phone: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    address: Mapped[str | None] = mapped_column(Text, nullable=True)
+    company_name: Mapped[str] = mapped_column(String, nullable=False, default="Marvenixx")
+    address: Mapped[str] = mapped_column(String, nullable=False, default="")
+    phone: Mapped[str] = mapped_column(String, nullable=False, default="")
+    website: Mapped[str] = mapped_column(String, nullable=False, default="")
+    footer: Mapped[str] = mapped_column(String, nullable=False, default="")
+    logo_base64: Mapped[str] = mapped_column(String, nullable=False, default="")
 
-    currency_symbol: Mapped[str] = mapped_column(String(10), default="₵", nullable=False)
+    currency_symbol: Mapped[str] = mapped_column(String, nullable=False, default="₵")
 
+    # Optional extra columns you added in DB
     receipt_footer: Mapped[str | None] = mapped_column(Text, nullable=True)
-
-    # Optional: logo url or path if you ever need it
     logo_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+

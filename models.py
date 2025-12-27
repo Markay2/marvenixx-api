@@ -55,10 +55,15 @@ class StockMove(Base):
 class Sale(Base):
     __tablename__ = "sale"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    customer_name: Mapped[str | None] = mapped_column(String, nullable=True)
-    total_amount: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+    id = Column(Integer, primary_key=True, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    customer_name = Column(String, nullable=True)
+
+    # ✅ ADD THIS (matches your DB)
+    location_id = Column(Integer, ForeignKey("location.id"), nullable=False)
+
+    total_amount = Column(Numeric(14, 2), nullable=False, default=0)
 
 
 class SaleLine(Base):

@@ -39,8 +39,7 @@ class SaleIn(BaseModel):
 @router.post("/")
 def create_sale(payload: SaleIn, db: Session = Depends(get_db)):
     if not payload.location_id:
-        raise HTTPException(status_code=400, detail="location_id is required")
-
+     raise HTTPException(status_code=400, detail="location_id is required")
     if not payload.lines:
         raise HTTPException(status_code=400, detail="No lines provided")
 
@@ -51,12 +50,16 @@ def create_sale(payload: SaleIn, db: Session = Depends(get_db)):
             total_amount=0,
         )
         db.add(sale)
-        db.flush()  # ✅ now sale.id and sale.created_at exist (created_at may be server_default)
+        db.flush()  # sale.id exists now
 
-        # ✅ receipt_no (safe even if created_at is None)
-        year = sale.created_at.year if sale.created_at else date.today().year
-        sale.receipt_no = f"MX-{year}-{sale.id:06d}"
-        db.flush()
+        # ✅ receipt_no: only set if column exists on model
+        year = sale.created_at.year if getattr(sale, "created_at", None) else date.today().year
+        receipt_no = f"MX-{year}-{sale.id:06d}"
+        if hasattr(sale, "receipt_no"):
+            sale.receipt_no = receipt_no
+            db.flush()
+        else:
+            receipt_no = None  # local model/db might not have it yet
 
         total = 0.0
         low_stock = []
@@ -106,16 +109,14 @@ def create_sale(payload: SaleIn, db: Session = Depends(get_db)):
 
             remaining = available - qty
             if remaining <= ALERT_THRESHOLD:
-                low_stock.append(
-                    {"sku": product.sku, "name": product.name, "remaining": float(remaining)}
-                )
+                low_stock.append({"sku": product.sku, "name": product.name, "remaining": float(remaining)})
 
         sale.total_amount = total
         db.commit()
 
         return {
             "sale_id": sale.id,
-            "receipt_no": sale.receipt_no,
+            "receipt_no": getattr(sale, "receipt_no", None) or receipt_no,
             "total": float(total),
             "low_stock": low_stock,
         }
@@ -126,6 +127,7 @@ def create_sale(payload: SaleIn, db: Session = Depends(get_db)):
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
+
 
 
 @router.get("/history")
